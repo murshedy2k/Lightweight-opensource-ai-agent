@@ -64,7 +64,11 @@ class Schema(ABC):
         t = Schema.resolve_json_schema_type(raw_type)
 
         if nullable and val is None:
+            if "enum" in schema and val not in schema["enum"]:
+                return [f"{label} must be one of {schema['enum']}"]
             return []
+        if (raw_type == "null" or raw_type == ["null"]) and val is not None:
+            return [f"{label} should be null"]
         if t == "integer" and (not isinstance(val, int) or isinstance(val, bool)):
             return [f"{label} should be integer"]
         if t == "number" and (
