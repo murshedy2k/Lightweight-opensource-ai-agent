@@ -1,13 +1,15 @@
-"""Spawn tool for creating background subagents."""
+"""Tools for creating and controlling session-owned subagent tasks."""
 
 # pyright: reportIncompatibleMethodOverride=false
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
+from nanobot.agent.subagent import SubagentControlError
 from nanobot.agent.tools.base import Tool, ToolResult, tool_parameters
-from nanobot.agent.tools.context import current_request_context
+from nanobot.agent.tools.context import current_request_context, current_request_session_key
 from nanobot.agent.tools.schema import (
     BooleanSchema,
     NumberSchema,
@@ -46,9 +48,9 @@ if TYPE_CHECKING:
     )
 )
 class SpawnTool(Tool):
-    """Tool to spawn a subagent for background task execution."""
+    """Create a subagent task for background or inline execution."""
 
-    def __init__(self, manager: "SubagentManager"):
+    def __init__(self, manager: SubagentManager):
         self._manager = manager
 
     @classmethod
@@ -92,7 +94,11 @@ class SpawnTool(Tool):
             return ToolResult.error("Error: spawn requires an active model runtime")
         origin_channel = request_ctx.channel
         origin_chat_id = request_ctx.chat_id
-        session_key = request_ctx.session_key or f"{origin_channel}:{origin_chat_id}"
+        session_key = request_ctx.session_key or (
+            f"{origin_channel}:{origin_chat_id}" if origin_channel and origin_chat_id else None
+        )
+        if not session_key:
+            return ToolResult.error("Error: spawn requires an active session identity")
         method = self._manager.run_inline if wait else self._manager.spawn
         return await method(
             task=task,
@@ -105,3 +111,57 @@ class SpawnTool(Tool):
             temperature=temperature,
             workspace_scope=current_workspace_scope(),
         )
+
+
+@tool_parameters(tool_parameters_schema(
+    action=StringSchema(
+        "send queues a message; cancel requests an idempotent stop and returns the current state.",
+        enum=("send", "cancel"),
+    ),
+    task_id=StringSchema("Full task ID returned by spawn, owned by the current session."),
+    message=StringSchema(
+        "Text for send only, at most 8192 UTF-8 bytes. Accepted means queued, not delivered. "
+        "Delivery receipts mean injected into the task transcript, not that the task acted on the message.",
+        max_length=8192,
+    ),
+    required=["action", "task_id"],
+))
+class SubagentTool(Tool):
+    """Send messages to or cancel a session's private tasks."""
+
+    def __init__(self, manager: SubagentManager):
+        self._manager = manager
+
+    @classmethod
+    def create(cls, ctx: ToolContext) -> Tool:
+        if ctx.subagent_manager is None:
+            raise RuntimeError("SubagentTool requires an initialized subagent manager")
+        return cls(ctx.subagent_manager)
+
+    @property
+    def name(self) -> str:
+        return "subagent"
+
+    @property
+    def description(self) -> str:
+        return "Send a message to or cancel a private subagent task. Use my to inspect tasks and receipts."
+
+    @property
+    def concurrency_safe(self) -> bool:
+        return True
+
+    async def execute(self, action: str, task_id: str, message: str | None = None,
+                      **kwargs: Any) -> str:
+        owner = current_request_session_key()
+        try:
+            if action == "send":
+                return json.dumps(self._manager.send(task_id, owner, message))
+            if action == "cancel":
+                status = await self._manager.cancel(task_id, owner)
+                return json.dumps({
+                    "task_id": task_id, "state": status.state,
+                    "receipts": status.receipts, "result": status.result, "error": status.error,
+                }, ensure_ascii=False)
+            return ToolResult.error("Error: unknown subagent action")
+        except SubagentControlError as exc:
+            return ToolResult.error(f"Error: {exc}")

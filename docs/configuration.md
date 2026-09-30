@@ -2265,7 +2265,7 @@ The notification gate runs on a built-in system prompt. Advanced users can overr
 
 ## Subagent Concurrency
 
-By default, nanobot allows four subagents to run at the same time. Additional subagents wait for capacity instead of being rejected. Lower the limit if a local model server cannot hold multiple KV caches, or raise it when the provider can handle more parallel work:
+By default, nanobot allows four subagents to run at the same time. Additional tasks wait for capacity. Lower the limit to reduce load on a local model server, or raise it when the provider can handle more parallel work:
 
 ```json
 {
@@ -2283,6 +2283,14 @@ The deprecated `agents.defaults.failOnToolError` field is silently ignored when 
 |--------|---------|-------------|
 | `agents.defaults.maxConcurrentSubagents` | `4` | Maximum number of subagents that may run at the same time. Additional tasks wait for capacity. |
 
+
+### Managing subagent tasks
+
+In the conversation that started a subagent, you can ask nanobot to check its progress, send it follow-up instructions, or cancel it. Cancelling one subagent leaves other tasks running.
+
+Use `/stop` to stop the current session and its subagent tasks; other sessions are unaffected. Cancellation does not remove files already created, and some operations may take time to stop.
+
+Subagent tasks cannot resume after nanobot restarts. Start a new task if you need to continue the work.
 
 ## Auto Compact
 
